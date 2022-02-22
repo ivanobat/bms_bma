@@ -1,0 +1,261 @@
+---
+title: "Homework 20211031"
+author: "Ivan Aguilar"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message= FALSE, warning = FALSE)
+```
+
+```{r}
+library(bayestestR)
+library(rstanarm)
+library(ggplot2)
+library(tidyverse)
+library(mombf)
+PATH= '/home/ivanobat/gitrepos/StatModInf/seminar2'
+source(file.path(PATH,"routines_seminar1.R"))
+source(file.path(PATH,"routines_homework.R"))
+set.seed(13)
+```
+
+# Homework
+
+In Seminar 1, we used LASSO to select and predict variables on the Vessel data. Bayesian Model Selection (BMS) that we implemented in this Seminar 2 is typically more conservative than LASSO in terms of model selection, it results in more coefficients very close to 0. As a result, Bayesian Model Averaging (BMA) that relies on BMS weights may predict worse than LASSO. On the other hand LASSO is often worse at detecting the variables that truly matter (i.e. for explanatory purposes) than BMS. In this homework you will apply Bayesian Model Selection and Bayesian Model Averaging to the Vessel dataset and compare your results to those obtained with LASSO in Seminar 1. Recall that for this dataset our objective is to predict the content of compound 1 (sodium oxide) from the 1920 frequencies.
+
+1. Load the Vessel data
+2. Conduct a prior eliciation to choose $g$
+3. Run a Bayesian model selection
+4. Obtain predictions by Bayesian Model Averaging
+5. Compare to the results obtained with LASSO
+
+# 1. Loading data
+
+```{r}
+data_logx <- log(read_csv(file.path(PATH, "data/Vessel_X.txt"), col_names = FALSE))
+dim(data_logx)
+data_y <- read_csv(file.path(PATH, "data/Vessel_Y.txt"), col_names = FALSE)
+data_y <- data_y[,1]
+dim(data_y)
+colnames(data_logx)<-sprintf("%s%i","F",seq(100,400,1))
+colnames(data_y)<-sprintf("%s%i","Y",seq(1,ncol(data_y)))
+data<-cbind(data_logx,data_y)
+```
+
+```{r}
+head(data)
+```
+# 2. Prior elicitation to select g
+First we create the model matrix
+```{r}
+X= model.matrix(~., data=data_logx)
+y= data_y
+n= nrow(X)
+```
+
+and set sequence values of g to try out
+```{r}
+gseq= seq(.01,2,length=40)
+gseq
+```
+Based on the sequence for g we can now get a prior expectation for Tau, using 1000 simulations for B~N(0,I) (same as in the seminar notes)
+First we obtain constant denominator value SSE 
+```{r}
+library(mvtnorm)
+V= diag(ncol(X))
+beta= rmvnorm(1000, sigma= V) #Simulation for B
+sse= colSums((X %*% t(beta))^2) / n #Tau mean denominator for each G
+```
+
+and second the prior mean of Tau for each value of g (theoretical r-squared)
+```{r}
+r2= double(length(gseq))
+for (i in 1:length(gseq)) {
+  r2[i]= mean(sse * gseq[i] / (1 + sse * gseq[i]))
+}
+r2
+```
+Finally we plot g values vs theoretical r squared
+```{r}
+par(mar=c(4,5,.1,.1), cex.lab=1, cex.axis=1)
+plot(gseq, r2, type='l', xlab='g', ylab=expression(paste('Theoretical ',R^2)))
+points(x=gseq, y=r2, pch = 16, col='gray')
+```
+Having all the information above, I would select g = 0.16307692 (4th value in the sequence) which has a theoretical r-squared > 0.98. This g will be computationally accessible without having too much of an impact on the overall model
+
+# 3. Run a bayesian model selection
+
+Before we start with BMS we initialize a few variables that we will be used during the exercise
+```{r}
+y_t= t(y) #Just a transpose of the y
+X= data_logx
+X= model.matrix(~., data=data_logx)
+y= data_y
+n= nrow(data_logx)  # No. observations
+p= ncol(data_logx)  # No. features
+```
+
+## Estimation
+On this case we will run the model selection utilizing a Zellner's prior with g=1 for the coeficients and a beta-binomial prior for the model
+```{r}
+fit.bayesreg <- modelSelection(y=y_t, x=X[,-1], priorCoef=zellnerprior(taustd=1), priorDelta=modelbbprior(1,1))
+```
+
+## Inference
+Then we have a look at the top 10 suggested models after the BMS estimation
+```{r}
+head(postProb(fit.bayesreg),100)
+```
+
+## Bayes Model Averaging
+After computing the models we can now create a table with the BMA coefficient estimators, posterior intervals and marginal inclusion probabilities
+```{r}
+ci.bayesreg <- coef(fit.bayesreg)[-c(1,nrow(coef(fit.bayesreg))),] #Getting coefficients and removing the intercept
+#ci.bayesreg <- coef(fit.bayesreg)
+sel.bayesreg <- ci.bayesreg[,4, drop=FALSE] > 0.5 #Selected coefficients with marginal inclusion probability > 0.5
+ci.bayesreg[,1:3]= round(ci.bayesreg[,1:3], 3)  #Rounding CI
+ci.bayesreg[,4]= round(ci.bayesreg[,4], 4)      #Rounding marginal inclusion probability
+b= coef(fit.bayesreg)[-c(1,nrow(coef(fit.bayesreg))),1]
+```
+
+We can also analyze the number of elements in each model proposed through all iterations
+```{r}
+nvars= rowSums(fit.bayesreg$postSample)
+par(mar=c(4,5,.1,.1), cex.lab=1.3, cex.axis=1.3)
+plot(nvars, type='l', xlab='Gibbs iteration', ylab='Model size')
+```
+If we now plot the marginal probability for each feature over each iteration we can see how it stabilizes 
+```{r}
+margppest= matrix(NA,nrow=nrow(fit.bayesreg$postSample),ncol=ncol(fit.bayesreg$postSample))
+for (j in 1:ncol(fit.bayesreg$postSample)) {
+    margppest[,j]= cumsum(fit.bayesreg$postSample[,j])/(1:nrow(fit.bayesreg$postSample))
+}
+
+par(mar=c(4,5,.1,.1), cex.lab=1, cex.axis=1)
+plot(margppest[,1], type='l', ylim=c(0,1), col='black', xlab='Gibbs iteration', ylab='Estimated marginal probability')
+for (j in 2:ncol(margppest)) lines(margppest[,j], col='black')
+```
+We show the first 10 rows of the model selection output
+```{r}
+head(ci.bayesreg,10)
+```
+But more importantly the same output but for coefficients different from zero
+```{r}
+head(ci.bayesreg[ci.bayesreg[,1]!=0,, drop=FALSE],10)
+```
+So based on the above let's quantify the following:
+- the non-zero coefficients from the BMS/BMA selection
+- the coefficients with marginal inclusion probability bigger than 0.5, which help us identify the most significant features
+
+```{r}
+#coefficients != 0
+sum(ci.bayesreg[,1]!=0)
+
+#marginal inclusion > 0.5
+sum(ci.bayesreg[,4]>0.5)
+ci.bayesreg[ci.bayesreg[,4]>0.5,]
+```
+We can also plot the whole set of marginal inclusion probabilities to show all that what we have stated previously
+```{r}
+col= rep('black',length(b))
+col[b %in% c(-2/3, 1/3, 2/3)]= 'blue'
+col[b==1]= 'red'
+par(mar=c(4,5,1,1), cex.lab=1, cex.axis=1)
+plot(coef(fit.bayesreg)[-c(1,nrow(coef(fit.bayesreg))),'margpp'], col=col, xlab='Variable index', ylab='Posterior marginal inclusion')
+points(1:p, ifelse(ci.bayesreg[,1]!=0,NaN,0), pch=1, col='red', ldw=1)
+points(1:p, ifelse(ci.bayesreg[,4]>0.5,ci.bayesreg[,4],NaN), pch=1, col='blue', ldw=1)
+legend( x="topright", 
+        legend=c("Above 0.5 margpp","Zero coeff"), 
+        col=c("blue","red"), 
+        pch=c(1,1), merge=FALSE )
+```
+Another way to see the results by focusing on the proposed coefficients and CIs. We can see the CIs that do not contain zero(cyan) and also the coefficient points that are further apart from zero. 
+```{r}
+plot(NA, ylim=1.25*range(ci.bayesreg[,1:3]), xlim=c(0,nrow(ci.bayesreg)), ylab='95% CI', xlab='', main='Bayesian Model Selection')
+cols= ifelse(beta < ci.bayesreg[ , 1] | beta > ci.bayesreg[, 2], 5, 1)
+segments(y0 = ci.bayesreg[, 2], y1 = ci.bayesreg[, 3], x0 = 1:nrow(ci.bayesreg), col = cols)
+points(1:p, b, pch = 42, col='black', lwd=1)
+```
+
+# 4. Obtaining predictions
+Using the BMA results we produce prediction values for component 1 using the BMA coefficients, and for example purposes we show the first 10.
+```{r}
+#fit.bayesregcv <- kfoldCV.bayes(y=y_t, x=X, K=10, seed = 13)
+```
+```{r}
+#fit.bayesregcv$pred
+```
+```{r}
+#as.vector(scale(X[,-1])%*%b + data_logx[,1])
+```
+
+
+```{r}
+#dim(X[,-1])
+#length(fit.bayesreg$pred)
+#data_logx[,1]
+#pred2 = as.vector(X[,-1] %*% b + coef(fit.bayesreg)[1,1])
+pred2 = as.vector(X[,-1] %*% b + coef(fit.bayesreg)[1,1])
+pred2
+```
+
+We then calculate the accuracy of our model vs the original y and we can see that is quite good
+```{r}
+r2.bayes= as.vector(cor(data_y,pred2)^2)
+r2.bayes
+```
+# 5. Comparison with Lasso
+Now having a look at the previous analysis we did of the vessel dataset with lasso, we can compare BMS/BMA vs Lasso. So let's recap what we found with Lasso.
+
+First we fit the lasso
+```{r}
+library(glmnet)
+fit.lasso= cv.glmnet(x=as.matrix(data_logx), y=data_y$Y1, nfolds=10)
+fit.lasso
+```
+The non-zero coefficients from Lasso are much less than Bayes
+```{r}
+b.lasso <- as.vector(coef(fit.lasso, s='lambda.min'))
+names(b.lasso) <- c('intercept',colnames(data_logx))
+sum(b.lasso!=0) #Lasso
+sum(ci.bayesreg[,1]!=0) #Bayes
+```
+But our r-squared scores is a bit better with Bayes
+```{r}
+cv.lassobic= kfoldCV.lasso(x=as.matrix(data_logx), y=data_y$Y1,K=10,seed=1,criterion="cv")
+r2.lassobic= cor(data_y$Y1,cv.lassobic$pred)^2
+r2.lassobic
+r2.bayes
+```
+The above could mean that the penalization from lasso is punishing also the accuracy.
+In general we see that both models agree in a large majority of the coefficients being set to zero or close to zero. On this point several coefficients have been pushed to zero on the lasso case and not with Bayes, where they remain small but not zero, as we can see in the graph below.
+
+```{r}
+data.frame(bayes= ci.bayesreg[,1], lasso= b.lasso[-1] ) %>% 
+  ggplot(aes(x=bayes,y=lasso)) + 
+  geom_point(shape = "O",size=2) +
+  geom_abline(slope=1, intercept = 0, linetype = 'dashed') +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  xlab('Bayes') +
+  ylab('Lasso') +
+  coord_cartesian(xlim=c(-2,0.5),ylim=c(-2,0.5)) +
+  theme_classic()
+```
+Finally let's plot the coefficients of Bayes and Lasso together where we can confirm the general agreement, but in larger coefficients where Bayes and Lasso agree, Bayes tends to me make the coefficient larger, therefore highlighting more its importance
+```{r}
+plot(NA, ylim=1.25*range(ci.bayesreg[,1:3]), xlim=c(0,nrow(ci.bayesreg)), ylab='95% CI', xlab='', main='Bayesian Model Selection')
+cols= ifelse(b< ci.bayesreg[ , 1] | b > ci.bayesreg[, 2], 5, 1)
+segments(y0 = ci.bayesreg[, 2], y1 = ci.bayesreg[, 3], x0 = 1:nrow(ci.bayesreg), col = cols)
+
+points(1:p, b.lasso[-1], pch = 43, col='blue', lwd=1) #Lasso points
+points(1:p, b, pch = 21, col='black', lwd=1) #BMA points
+legend( x="bottomright", 
+        legend=c("Lasso","Bayes"), 
+        col=c("blue","black"), 
+        pch=c(43,21), merge=FALSE )
+```
+
+
