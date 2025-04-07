@@ -1,6 +1,6 @@
 #########################################################################################
 ##
-## R ROUTINES FOR HOMWEWORK - STATISTICAL MODELLING AND INFERENCE.
+## R ROUTINES - STATISTICAL MODELLING AND INFERENCE.
 
 #########################################################################################
 

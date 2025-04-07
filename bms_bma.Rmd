@@ -1,5 +1,6 @@
 ---
-title: "Homework 20211031"
+title: "Bayesian Model Selection and Bayesian Model Averaging"
+date: 2021-10-31
 author: "Ivan Aguilar"
 output: html_document
 ---
@@ -16,13 +17,13 @@ library(rstanarm)
 library(ggplot2)
 library(tidyverse)
 library(mombf)
-PATH= '/home/ivanobat/gitrepos/StatModInf/seminar2'
+PATH= './bms_bma'
 source(file.path(PATH,"routines_seminar1.R"))
-source(file.path(PATH,"routines_homework.R"))
+source(file.path(PATH, "routines_homework.R"))
 set.seed(13)
 ```
 
-# Homework
+# Objective
 
 In Seminar 1, we used LASSO to select and predict variables on the Vessel data. Bayesian Model Selection (BMS) that we implemented in this Seminar 2 is typically more conservative than LASSO in terms of model selection, it results in more coefficients very close to 0. As a result, Bayesian Model Averaging (BMA) that relies on BMS weights may predict worse than LASSO. On the other hand LASSO is often worse at detecting the variables that truly matter (i.e. for explanatory purposes) than BMS. In this homework you will apply Bayesian Model Selection and Bayesian Model Averaging to the Vessel dataset and compare your results to those obtained with LASSO in Seminar 1. Recall that for this dataset our objective is to predict the content of compound 1 (sodium oxide) from the 1920 frequencies.
 
